@@ -1,0 +1,522 @@
+#!/usr/bin/env python2
+# Jotmuch bookmark manager https://github.com/davidlazar/jotmuch
+# Copyright (C) 2014 David Lazar
+from collections import OrderedDict
+import base64
+import email
+import hashlib
+import hmac
+import os
+import random
+import tempfile
+import subprocess
+import sys
+from urlparse import urlparse
+
+import arrow
+import click
+import jinja2
+from lxml import html
+import xapian
+import yaml
+
+DATABASE_DIR = os.path.expanduser('~/.jotmuch')
+ARCHIVE_DIR = os.path.expanduser('~/.jotmuch/archives')
+PNGVIEW = 'feh'
+URLSNAP = 'urlsnap'
+
+HMAC_KEY = 'Jotmuch'
+EDITOR = os.environ.get('EDITOR', 'vim')
+
+# http://xapian.org/docs/omega/termprefixes.html
+boolean_prefix = {
+    'id': 'Q',
+    'tag': 'K',
+    'site': 'H',
+}
+
+probabilistic_prefix = {
+    'title': 'S',
+    'author': 'A',
+    'notes': 'XNOTES:',
+}
+
+# exclusive boolean prefixes are combined with OR:
+# id:A id:B tag:X tag:Y == (id:A OR id:B) (tag:X AND tag:Y)
+exclusive_prefixes = ['id', 'site']
+
+P = boolean_prefix.copy()
+P.update(probabilistic_prefix)
+
+indexer = xapian.TermGenerator()
+stemmer = xapian.Stem("english")
+indexer.set_stemmer(stemmer)
+
+VALUE_URL, VALUE_TITLE, VALUE_TAGS, VALUE_CREATED, VALUE_ARCHIVED = range(5)
+
+### Document creation --------------------------------------------------
+
+def dict2doc(y):
+    doc = xapian.Document()
+    indexer.set_document(doc)
+
+    url = y['url']
+    uid = urlid(url)
+    sid = uid[:8]
+    doc.add_boolean_term(P['id'] + uid)
+    # add the id and short id as unprefixed/stemmed terms to
+    # make it easier to select bookmarks from search results
+    for idterm in [uid, sid, 'Z' + uid, 'Z' + sid]:
+        doc.add_boolean_term(idterm)
+
+    doc.add_value(VALUE_URL, url)
+
+    # add hostname parts as site terms
+    hostname = urlparse(url).hostname
+    if hostname:
+        hs = hostname.split('.')
+        for i in xrange(len(hs)):
+            doc.add_boolean_term(P['site'] + '.'.join(hs[i:]))
+
+    archive_path = get_archive_path(uid)
+    if archive_path:
+        y['tags'].append('archived')
+
+    # remove duplicate tags, preserving order
+    y['tags'] = list(OrderedDict.fromkeys(y['tags']))
+    alltags = u'\x1f'.join(y['tags'])
+    doc.add_value(VALUE_TAGS, alltags)
+    for tag in y['tags']:
+        doc.add_boolean_term(P['tag'] + tag)
+
+    if 'title' in y:
+        doc.add_value(VALUE_TITLE, y['title'])
+        index_text(y['title'], 'title')
+
+    if 'notes' in y:
+        doc.set_data(y['notes'])
+        index_text(y['notes'], 'notes')
+
+    created = y.get('created', arrow.utcnow()).timestamp
+    doc.add_value(VALUE_CREATED, xapian.sortable_serialise(created))
+
+    if archive_path:
+        archived = y.get('archived', arrow.utcnow()).timestamp
+        doc.add_value(VALUE_ARCHIVED, xapian.sortable_serialise(archived))
+        index_archive(doc, archive_path)
+
+    return doc
+
+
+def doc2dict(doc):
+    od = OrderedDict()
+
+    url = doc.get_value(VALUE_URL)
+    od['url'] = url
+
+    title = doc.get_value(VALUE_TITLE)
+    if title:
+        od['title'] = title.decode('UTF-8')
+
+    tags = doc.get_value(VALUE_TAGS)
+    od['tags'] = tags.decode('UTF-8').split(u'\x1f') if tags else []
+
+    created = xapian.sortable_unserialise(doc.get_value(VALUE_CREATED))
+    od['created'] = arrow.get(created)
+
+    archived_val = doc.get_value(VALUE_ARCHIVED)
+    if archived_val:
+        archived = xapian.sortable_unserialise(archived_val)
+        od['archived'] = arrow.get(archived)
+
+    od['notes'] = doc.get_data().decode('UTF-8')
+
+    return od
+
+
+timefmt = '%Y-%m-%d %H:%M:%S UTC'
+
+# rewrite dict to use standard YAML types
+def standardize(d):
+    d['created'] = d['created'].strftime(timefmt)
+    if 'archived' in d:
+        d['archived'] = d['archived'].strftime(timefmt)
+    return d
+
+
+def unstandardize(d):
+    d['created'] = arrow.Arrow.strptime(d['created'], timefmt)
+    if 'archived' in d:
+        d['archived'] = arrow.Arrow.strptime(d['archived'], timefmt)
+    return d
+
+
+def docs2yaml(docs):
+    ds = [standardize(doc2dict(d)) for d in docs]
+    return yaml.dump_all(ds, Dumper=OrderedDumper)
+
+
+def yaml2docs(y):
+    ds = yaml.safe_load_all(y)
+    return [dict2doc(unstandardize(d)) for d in ds]
+
+
+def urlid(url):
+    d = hmac.new(HMAC_KEY, url, hashlib.md5).digest()
+    # padding is always '======', so drop it:
+    return base64.b32encode(d).lower()[:-6]
+
+
+### Bookmarking --------------------------------------------------------
+
+def bookmark_url(url, tags=[], archive=False, fetch_title=False):
+    db = xapian.WritableDatabase(DATABASE_DIR, xapian.DB_CREATE_OR_OPEN)
+    docid = get_docid(db, url)
+    if docid:
+        doc = db.get_document(docid)
+        d = doc2dict(doc)
+        d['tags'].extend(tags)
+    else:
+        d = {'url': url, 'tags': tags}
+
+    if archive:
+        archive_url(url)
+
+    if fetch_title and not archive and 'title' not in d:
+        xmldoc = html.parse(url)
+        title = xmldoc.findtext('.//title')
+        d['title'] = title
+
+    # create a doc to fill in any missing fields
+    doc = dict2doc(d)
+    newdocs = yaml2docs(editor(docs2yaml([doc])))
+
+    # insert_docs recomputes the docid, in case the user changes the url
+    # in the editor. This ensures every URL has at most one docid.
+    insert_docs(newdocs, db)
+
+    return newdocs
+
+
+def insert_docs(docs, db=None):
+    db = db or xapian.WritableDatabase(DATABASE_DIR, xapian.DB_CREATE_OR_OPEN)
+    for doc in docs:
+        docid = get_docid(db, doc.get_value(VALUE_URL))
+        if docid:
+            db.replace_document(docid, doc)
+        else:
+            db.add_document(doc)
+    db.commit()
+
+
+def get_docid(db, url):
+    uid = urlid(url)
+    postlist = db.postlist(P['id'] + uid)
+    try:
+        plitem = postlist.next()
+        return plitem.docid
+    except StopIteration:
+        return None
+
+
+### Archiving ----------------------------------------------------------
+
+def archive_url(url):
+    try:
+        os.makedirs(ARCHIVE_DIR)
+    except:
+        if not os.path.isdir(ARCHIVE_DIR):
+            raise
+
+    uid = urlid(url)
+    mhtpath = os.path.join(ARCHIVE_DIR, uid + '.mhtml')
+    pngpath = os.path.join(ARCHIVE_DIR, uid + '.png')
+
+    if os.path.isfile(mhtpath):
+        return False  # already archived
+
+    urlsnap(url, mhtml=mhtpath, png=pngpath)
+    return True
+
+
+def urlsnap(url, **kwargs):
+    args = [URLSNAP, url]
+    for k, v in kwargs.iteritems():
+        args += ['--' + k, v]
+    subprocess.check_call(args)
+
+
+def get_archive_path(uid, ext='.mhtml'):
+    path = os.path.join(ARCHIVE_DIR, uid + ext)
+    return path if os.path.isfile(path) else None
+
+
+### Indexing -----------------------------------------------------------
+
+def index_archive(doc, mhtpath):
+    with open(mhtpath) as f:
+        msg = email.message_from_file(f)
+        for part in msg.walk():
+            if part.is_multipart():
+                continue
+
+            ct = part.get_content_type()
+            if ct == 'text/html':
+                html = part.get_payload(decode=True)
+                index_html(doc, html)
+
+
+def index_html(doc, htmlstr):
+    xmldoc = html.document_fromstring(htmlstr)
+
+    title = xmldoc.findtext('.//title')
+    if title:
+        index_text(title, 'title')
+        if not doc.get_value(VALUE_TITLE):
+            doc.add_value(VALUE_TITLE, title)
+
+    authors = xmldoc.xpath('//meta[@name="author"]/@content')
+    for author in authors:
+        index_text(author, 'author')
+
+    descs = xmldoc.xpath('//meta[@name="description"]/@content')
+    for desc in descs:
+        index_text(desc)
+
+    # TODO index keywords
+
+    body = xmldoc.text_content().splitlines()
+    body = filter(None, [x.strip() for x in body])
+    body = '\n'.join(body)
+    index_text(body)
+
+
+def index_text(text, prefix=None):
+    if prefix:
+        indexer.index_text(text, 1, P[prefix])
+    indexer.index_text(text)
+
+
+### Searching ----------------------------------------------------------
+
+def search_terms(terms):
+    return search_querystr(' '.join(terms))
+
+
+def search_querystr(querystr):
+    try:
+        db = xapian.Database(DATABASE_DIR)
+    except xapian.DatabaseOpeningError:
+        print('Unable to open database for reading: DATABASE_DIR=%s' % repr(DATABASE_DIR))
+        print("Create a database by adding a bookmark using 'jot bookmark'.")
+        sys.exit(1)
+
+    if querystr == '' or querystr == '*':
+        query = xapian.Query.MatchAll
+    else:
+        query = parse_query(db, querystr)
+
+    enquire = xapian.Enquire(db)
+    enquire.set_sort_by_relevance_then_value(VALUE_CREATED, False)
+    enquire.set_query(query)
+    mset = enquire.get_mset(0, db.get_doccount())
+
+    return mset
+
+
+def parse_query(db, querystr):
+    qp = xapian.QueryParser()
+    qp.set_database(db)
+    qp.set_stemmer(stemmer)
+    qp.set_stemming_strategy(xapian.QueryParser.STEM_SOME)
+    qp.set_default_op(xapian.Query.OP_AND)
+
+    for name, prefix in boolean_prefix.items():
+        qp.add_boolean_prefix(name, prefix, name in exclusive_prefixes)
+    for name, prefix in probabilistic_prefix.items():
+        qp.add_prefix(name, prefix)
+
+    qpflags = ( xapian.QueryParser.FLAG_BOOLEAN
+              | xapian.QueryParser.FLAG_PHRASE
+              | xapian.QueryParser.FLAG_LOVEHATE
+              | xapian.QueryParser.FLAG_BOOLEAN_ANY_CASE
+              | xapian.QueryParser.FLAG_WILDCARD
+              | xapian.QueryParser.FLAG_PURE_NOT
+              )
+
+    query = qp.parse_query(querystr, qpflags)
+    return query
+
+
+### Pretty-printing ----------------------------------------------------
+
+default_formatstr = """{{ '\x1b[32;1m' if archived is defined else '\x1b[31;1m' }}{{sid}}\x1b[0m {{created.humanize()}}
+  {{ url }}
+{% if title %}
+  {{ title }}
+{% endif %}
+{% if tags %}
+  \x1b[1m{{ tags|join(' ') }}\x1b[0m
+{% endif %}
+"""
+
+def print_docs(docs, formatstr=default_formatstr):
+    template = jinja2.Template(formatstr,
+        keep_trailing_newline=True, trim_blocks=True)
+    for doc in docs:
+        print(render_doc(doc, template).encode('UTF-8'))
+
+
+def render_doc(doc, template):
+    d = doc2dict(doc)
+    uid = urlid(d['url'])
+    d['id'] = uid
+    d['sid'] = uid[:8]
+    return template.render(d)
+
+
+### Command-line -------------------------------------------------------
+
+@click.group()
+def cli():
+    """Jotmuch, a private bookmark manager
+
+    https://github.com/davidlazar/jotmuch
+    """
+    pass
+
+
+@cli.command(short_help='bookmark a url')
+@click.option('-a', '--archive', is_flag=True,
+    help='Archive the webpage located at URL.')
+@click.option('-t', '--fetch-title', is_flag=True,
+    help='Download the title of the webpage located at URL.')
+@click.argument('url')
+@click.argument('tags', nargs=-1, required=False)
+def bookmark(url, tags, archive, fetch_title):
+    """Bookmark the given URL."""
+    docs = bookmark_url(url, list(tags), archive, fetch_title)
+    print_docs(docs)
+
+
+@cli.command(short_help='edit existing bookmarks')
+@click.argument('terms', nargs=-1, default='*', required=False)
+def edit(terms):
+    mset = search_terms(terms)
+    docs = [m.document for m in mset]
+    newdocs = yaml2docs(editor(docs2yaml(docs)))
+    insert_docs(newdocs)
+    print_docs(newdocs)
+
+
+@cli.command(short_help='take webpage snapshots')
+@click.argument('terms', nargs=-1, default='*', required=False)
+def archive(terms):
+    """Archive bookmarks matching the given search terms."""
+    mset = search_terms(terms)
+    docs = []
+    # archive the bookmarks, then edit them
+    for m in mset:
+        url = m.document.get_value(VALUE_URL)
+        if archive_url(url):
+            print('Archived: ' + url)
+            docs.append(m.document)
+    if docs:
+        docs = [dict2doc(doc2dict(doc)) for doc in docs]
+        newdocs = yaml2docs(editor(docs2yaml(docs)))
+        insert_docs(newdocs)
+        print('')
+        print_docs(newdocs)
+
+
+@cli.command(short_help='view webpage snapshots')
+@click.argument('terms', nargs=-1, default='*', required=False)
+def view(terms):
+    mset = search_terms(terms)
+    args = [PNGVIEW]
+    for m in mset:
+        url = m.document.get_value(VALUE_URL)
+        uid = urlid(url)
+        path = get_archive_path(uid, '.png')
+        if path:
+            args.append(path)
+
+    if len(args) > 1:
+        subprocess.call(args)
+    else:
+        print('No archives to view.')
+
+
+@cli.command(short_help='search bookmarks')
+@click.argument('terms', nargs=-1, default='*', required=False)
+@click.option('--format', default=default_formatstr,
+    help='Configure the display of search results.')
+def search(terms, format):
+    """List bookmarks matching the given search terms."""
+    mset = search_terms(terms)
+    docs = [m.document for m in mset]
+    print_docs(docs, format)
+
+
+@cli.command('random', short_help='pick a random bookmark')
+@click.argument('terms', nargs=-1, default='*', required=False)
+@click.option('--format', default=default_formatstr)
+def jotrandom(terms, format):
+    """Pick a random bookmark matching the given search terms."""
+    mset = search_terms(terms)
+    m = random.SystemRandom().choice(mset)
+    print_docs([m.document], format)
+
+
+@cli.command(short_help='dump bookmarks as yaml')
+@click.argument('terms', nargs=-1, default='*', required=False)
+@click.option('--dump-terms', is_flag=True, help='Include Xapian terms in dump.')
+def dump(terms, dump_terms):
+    """Create a YAML dump of bookmarks matching the given search terms."""
+    mset = search_terms(terms)
+    ds = []
+    for m in mset:
+        d = standardize(doc2dict(m.document))
+        if dump_terms:
+            d['terms'] = [t.term for t in m.document]
+        ds.append(d)
+    yaml.dump_all(ds, stream=sys.stdout, Dumper=OrderedDumper)
+
+
+@cli.command('import', short_help='import bookmarks from pinboard json')
+@click.argument('jsonfile', type=click.File('rb'))
+def jotimport(jsonfile):
+    """Import bookmarks exported as JSON from Pinboard."""
+    import json
+    bs = json.load(jsonfile)
+    db = xapian.WritableDatabase(DATABASE_DIR, xapian.DB_CREATE_OR_OPEN)
+    for b in bs:
+        tags = b['tags'].split(' ')
+        d = {'url': b['href'], 'title': b['description'], 'tags': tags,
+             'created': arrow.get(b['time']), 'notes': b['extended']}
+        db.add_document(dict2doc(d))
+    print('Imported %d bookmarks' % len(bs))
+
+
+def editor(s, suffix='.yaml'):
+    with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+        tmp.write(s)
+        tmp.flush()
+        subprocess.check_call([EDITOR, tmp.name])
+        tmp.seek(0)
+        r = tmp.read()
+    return r
+
+
+class OrderedDumper(yaml.SafeDumper):
+    pass
+
+def _dict_representer(dumper, data):
+    return dumper.represent_mapping(
+        yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+        data.items())
+
+OrderedDumper.add_representer(OrderedDict, _dict_representer)
+
+if __name__ == '__main__':
+    cli()
