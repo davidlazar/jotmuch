@@ -4,10 +4,14 @@
 #include <glib/gstdio.h>
 #include <webkit2/webkit2.h>
 
+// use TorBrowser's user agent to reduce browser fingerprint
+#define USER_AGENT "Mozilla/5.0 (Windows NT 6.1; rv:24.0) Gecko/20100101 Firefox/24.0"
+
 static char *mhtml_file = NULL;
 static char *html_file = NULL;
 static char *png_file = NULL;
 static char *title_file = NULL;
+static gboolean enable_js = FALSE;
 
 static int todo = 0;
 
@@ -16,6 +20,7 @@ static GOptionEntry entries[] = {
     { "html", 0, 0, G_OPTION_ARG_FILENAME, &html_file, "Write HTML snapshot to FILE", "FILE" },
     { "png", 0, 0, G_OPTION_ARG_FILENAME, &png_file, "Write PNG snapshot to FILE", "FILE" },
     { "title", 0, 0, G_OPTION_ARG_FILENAME, &title_file, "Write page title to FILE", "FILE" },
+    { "js", 0, 0, G_OPTION_ARG_NONE, &enable_js, "Enable JavaScript", NULL },
     { NULL }
 };
 
@@ -138,6 +143,18 @@ int main(int argc, gchar* argv[]) {
     WebKitWebView *web_view = WEBKIT_WEB_VIEW(webkit_web_view_new());
     g_signal_connect(web_view, "load-changed", G_CALLBACK(load_changed), NULL);
     g_signal_connect(web_view, "load-failed", G_CALLBACK(load_failed), NULL);
+
+    WebKitSettings *settings = webkit_settings_new_with_settings(
+        "user-agent", USER_AGENT,
+        "enable-javascript", enable_js,
+        "enable-java", FALSE,
+        "enable-plugins", FALSE,
+        "enable-private-browsing", TRUE,
+        "enable-offline-web-application-cache", FALSE,
+        "enable-page-cache", FALSE,
+        NULL
+    );
+    webkit_web_view_set_settings(web_view, settings);
 
     GtkWidget *window = gtk_offscreen_window_new();
     gtk_window_set_default_size(GTK_WINDOW(window), 1280, 1024);

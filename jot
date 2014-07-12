@@ -24,6 +24,7 @@ DATABASE_DIR = os.path.expanduser('~/.jotmuch')
 ARCHIVE_DIR = os.path.expanduser('~/.jotmuch/archives')
 PNGVIEW = 'feh'
 URLSNAP = 'urlsnap'
+ENABLE_JS = True  # enable JavaScript in urlsnap when archiving
 
 HMAC_KEY = 'Jotmuch'
 EDITOR = os.environ.get('EDITOR', 'vim')
@@ -240,7 +241,7 @@ def archive_url(url):
 
 
 def urlsnap(url, **kwargs):
-    args = [URLSNAP, url]
+    args = [URLSNAP, url] + (['--js'] if ENABLE_JS else [])
     for k, v in kwargs.iteritems():
         args += ['--' + k, v]
     subprocess.check_call(args)
