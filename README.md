@@ -7,15 +7,22 @@ and organization.  It will be familiar to users of
 
 ## Installation
 
-Install the prerequisites:
+Install the prerequisites.  Arch Linux:
 
-    # pacman -S webkitgtk python2-xapian
-    $ pip2 install --user arrow click jinja2 lxml pyyaml
+    $ sudo pacman -S python2-pip python2-xapian python2-jinja python2-lxml python2-yaml webkitgtk
+
+Debian/Ubuntu:
+
+    $ sudo apt-get install python-pip python-xapian python-jinja2 python-lxml python-yaml libwebkit2gtk-3.0-dev
+
+Install required Python libraries that are not available as packages:
+
+    $ pip2 install --user arrow click
 
 Configure Jotmuch by editing the `jot` Python script.
 Install Jotmuch and urlsnap:
 
-    $ gcc `pkg-config --cflags --libs webkit2gtk-3.0` urlsnap.c -o urlsnap
+    $ gcc urlsnap.c $(pkg-config --cflags --libs webkit2gtk-3.0) -o urlsnap
     $ cp jot urlsnap ~/bin
 
 
