@@ -39,7 +39,7 @@ static FILE* open_file(char *path, char *mode) {
 
     FILE *f = fopen(path, mode);
     if (f == NULL) {
-        err(1, path);
+        err(1, "%s", path);
     }
     return f;
 }
