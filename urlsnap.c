@@ -1,6 +1,7 @@
 // urlsnap: save snapshots of webpages
 // Copyright (C) 2014 David Lazar
 #include <err.h>
+#include <string.h>
 #include <glib/gstdio.h>
 #include <webkit2/webkit2.h>
 
@@ -31,6 +32,18 @@ static void done() {
     }
 }
 
+static FILE* open_file(char *path, char *mode) {
+    if (strcmp(path, "-") == 0) {
+        return stdout;
+    }
+
+    FILE *f = fopen(path, mode);
+    if (f == NULL) {
+        err(1, path);
+    }
+    return f;
+}
+
 static void mhtml_finished(GObject *object, GAsyncResult *result, gpointer user_data) {
     WebKitWebView *web_view = WEBKIT_WEB_VIEW(object);
     GError *error = NULL;
@@ -46,7 +59,7 @@ static void html_finished(GObject *object, GAsyncResult *result, gpointer user_d
     GError *error = NULL;
     gsize length;
     guchar *h = webkit_web_resource_get_data_finish(wr, result, &length, &error);
-    FILE *f = g_fopen(html_file, "w");
+    FILE *f = open_file(html_file, "w");
     if (fwrite(h, length, 1, f) != 1) {
         errx(1, "error saving html");
     }
@@ -96,7 +109,7 @@ static void load_changed(WebKitWebView *web_view, WebKitLoadEvent load_event, gp
         const gchar *title = webkit_web_view_get_title(web_view);
         GString *s = g_string_new(title);
         g_string_append_c(s, '\n');
-        FILE *f = g_fopen(title_file, "w");
+        FILE *f = open_file(title_file, "w");
         if (fwrite(s->str, s->len, 1, f) != 1) {
             errx(1, "error saving title");
         }
