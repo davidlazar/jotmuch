@@ -138,11 +138,11 @@ so you can use it to bookmark pages that you visit anonymously.
 
 To archive bookmarks anonymously, you can
 [Torify](https://trac.torproject.org/projects/tor/wiki/doc/TorifyHOWTO)
-Jotmuch and/or urlsnap using [torsocks](https://code.google.com/p/torsocks/)
-or by running Jotmuch behind a
+urlsnap by running it behind a
 [transparent proxy](https://trac.torproject.org/projects/tor/wiki/doc/TransparentProxy).
+The `doc/torify.md` file has an example configuration.
 
-Avoid identity correlation by archiving bookmarks randomly:
+You can avoid identity correlation by archiving bookmarks randomly:
 
     $ jot archive id:$(jot random not tag:archived --format={{id}})
 
