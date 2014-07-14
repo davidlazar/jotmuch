@@ -22,8 +22,8 @@ import yaml
 
 DATABASE_DIR = os.path.expanduser('~/.jotmuch')
 ARCHIVE_DIR = os.path.expanduser('~/.jotmuch/archives')
-PNGVIEW = 'feh'
 URLSNAP = ['urlsnap', '--js']  # get rid of --js to disable JavaScript
+PNGVIEW = 'feh'
 
 HMAC_KEY = 'Jotmuch'
 EDITOR = os.environ.get('EDITOR', 'vim')
