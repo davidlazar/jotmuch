@@ -49,7 +49,7 @@ Check that the transparent proxy is working:
 If so, configure Jotmuch to use urlsnap as the anonymous user:
 
     # NO_AT_BRIDGE=1 disables annoying warnings from gtk
-    URLSNAP = ['sudo', 'NO_AT_BRIDGE=1', '-u', 'anonymous', '/home/anonymous/bin/urlsnap']:
+    URLSNAP = ['sudo', 'NO_AT_BRIDGE=1', '-u', 'anonymous', '/home/anonymous/bin/urlsnap']
 
     # ARCHIVE_DIR should be writeable by anonymous
     ARCHIVE_DIR = '/home/anonymous/jotmuch-archives'
