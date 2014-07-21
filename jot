@@ -409,6 +409,27 @@ def edit(terms):
     print_docs(newdocs)
 
 
+@cli.command(short_help='delete bookmarks')
+@click.argument('terms', nargs=-1, default='*', required=False)
+def delete(terms):
+    mset = search_terms(terms)
+    if len(mset) < 1:
+        print('No matches.')
+        return
+    docs = [m.document for m in mset]
+    print_docs(docs)
+    if click.confirm('Delete %s bookmarks (including archives)?' % len(docs)):
+        db = xapian.WritableDatabase(DATABASE_DIR, xapian.DB_CREATE_OR_OPEN)
+        for doc in docs:
+            uid = urlid(doc.get_value(VALUE_URL))
+            for ext in ['.png', '.mhtml']:
+                path = get_archive_path(uid, ext)
+                if path:
+                    os.remove(path)
+            db.delete_document(doc.get_docid())
+        db.commit()
+
+
 @cli.command(short_help='take webpage snapshots')
 @click.argument('terms', nargs=-1, default='*', required=False)
 def archive(terms):
