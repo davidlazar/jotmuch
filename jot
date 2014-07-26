@@ -169,7 +169,7 @@ def urlid(url):
 
 ### Bookmarking --------------------------------------------------------
 
-def bookmark_url(url, tags=[], archive=False, fetch_title=False):
+def bookmark_url(url, tags=[], archive=False, fetch_title=False, use_editor=True):
     db = xapian.WritableDatabase(DATABASE_DIR, xapian.DB_CREATE_OR_OPEN)
     docid = get_docid(db, url)
     if docid:
@@ -189,7 +189,10 @@ def bookmark_url(url, tags=[], archive=False, fetch_title=False):
 
     # create a doc to fill in any missing fields
     doc = dict2doc(d)
-    newdocs = yaml2docs(editor(docs2yaml([doc])))
+    if use_editor:
+        newdocs = yaml2docs(editor(docs2yaml([doc])))
+    else:
+        newdocs = [doc]
 
     # insert_docs recomputes the docid, in case the user changes the url
     # in the editor. This ensures every URL has at most one docid.
@@ -391,11 +394,13 @@ def cli():
     help='Archive the webpage located at URL.')
 @click.option('-t', '--fetch-title', is_flag=True,
     help='Download the title of the webpage located at URL.')
+@click.option('-s', '--skip-editor', is_flag=True,
+    help='Don\'t launch the editor to tune the bookmark before saving.')
 @click.argument('url')
 @click.argument('tags', nargs=-1, required=False)
-def bookmark(url, tags, archive, fetch_title):
+def bookmark(url, tags, archive, fetch_title, skip_editor):
     """Bookmark the given URL."""
-    docs = bookmark_url(url, list(tags), archive, fetch_title)
+    docs = bookmark_url(url, list(tags), archive, fetch_title, not skip_editor)
     print_docs(docs)
 
 
