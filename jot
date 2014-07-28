@@ -398,15 +398,15 @@ def cli():
     help='Archive the webpage located at URL.')
 @click.option('-t', '--fetch-title', is_flag=True,
     help='Download the title of the webpage located at URL.')
-@click.option('-s', '--skip-editor', is_flag=True,
-    help='Don\'t launch the editor to tune the bookmark before saving.')
+@click.option('--editor/--no-editor', default=True,
+    help='Edit the bookmark with a text editor before saving.')
 @click.option('-n', '--notes', is_flag=False,
     help='Set the notes from the command line.')
 @click.argument('url')
 @click.argument('tags', nargs=-1, required=False)
-def bookmark(url, tags, notes, archive, fetch_title, skip_editor):
+def bookmark(url, tags, notes, archive, fetch_title, editor):
     """Bookmark the given URL."""
-    docs = bookmark_url(url, list(tags), notes, archive, fetch_title, not skip_editor)
+    docs = bookmark_url(url, list(tags), notes, archive, fetch_title, editor)
     print_docs(docs)
 
 
