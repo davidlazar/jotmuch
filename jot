@@ -492,6 +492,14 @@ def search(terms, format):
     print_docs(docs, format)
 
 
+@cli.command(short_help='count bookmarks')
+@click.argument('terms', nargs=-1, default='*', required=False)
+def count(terms):
+    """Count bookmarks matching the given search terms."""
+    mset = search_terms(terms)
+    print(len(mset))
+
+
 @cli.command('random', short_help='pick a random bookmark')
 @click.argument('terms', nargs=-1, default='*', required=False)
 @click.option('--format', default=default_formatstr)
