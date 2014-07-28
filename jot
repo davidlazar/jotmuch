@@ -169,19 +169,18 @@ def urlid(url):
 
 ### Bookmarking --------------------------------------------------------
 
-def bookmark_url(url, tags=[], notes = '', archive=False, fetch_title=False, use_editor=True):
-    if not notes:
-        notes = ''
-
+def bookmark_url(url, tags=[], notes='', archive=False, fetch_title=False, use_editor=True):
     db = xapian.WritableDatabase(DATABASE_DIR, xapian.DB_CREATE_OR_OPEN)
     docid = get_docid(db, url)
     if docid:
         doc = db.get_document(docid)
         d = doc2dict(doc)
         d['tags'].extend(tags)
-        d['notes'] = notes
     else:
-        d = {'url': url, 'tags': tags, 'notes': notes}
+        d = {'url': url, 'tags': tags}
+
+    if notes:
+        d['notes'] = notes
 
     if archive:
         archive_url(url)
@@ -193,6 +192,7 @@ def bookmark_url(url, tags=[], notes = '', archive=False, fetch_title=False, use
 
     # create a doc to fill in any missing fields
     doc = dict2doc(d)
+
     if use_editor:
         newdocs = yaml2docs(editor(docs2yaml([doc])))
     else:
@@ -400,7 +400,7 @@ def cli():
     help='Download the title of the webpage located at URL.')
 @click.option('--editor/--no-editor', default=True,
     help='Edit the bookmark with a text editor before saving.')
-@click.option('-n', '--notes', is_flag=False,
+@click.option('-n', '--notes', default='',
     help='Set the notes from the command line.')
 @click.argument('url')
 @click.argument('tags', nargs=-1, required=False)
