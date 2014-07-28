@@ -400,8 +400,7 @@ def cli():
     help='Download the title of the webpage located at URL.')
 @click.option('--editor/--no-editor', default=True,
     help='Edit the bookmark with a text editor before saving.')
-@click.option('-n', '--notes', default='',
-    help='Set the notes from the command line.')
+@click.option('--notes', default='', help='Set notes about a bookmark.')
 @click.argument('url')
 @click.argument('tags', nargs=-1, required=False)
 def bookmark(url, tags, notes, archive, fetch_title, editor):
