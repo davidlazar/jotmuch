@@ -102,6 +102,7 @@ The `--format` option is used to customize the display of search results:
 The argument to `--format` is a [Jinja2 template](http://jinja.pocoo.org/docs/templates/).
 The following variables are supported: id, sid (short id), url, title,
 created and archived ([Arrow](http://crsmithdev.com/arrow/) objects),
+pngpath and mhtmlpath (even if these files don't exist yet),
 tags, and notes.
 
 List all tags, sorted by frequency:

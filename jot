@@ -381,6 +381,8 @@ def render_doc(doc, template):
     uid = urlid(d['url'])
     d['id'] = uid
     d['sid'] = uid[:8]
+    for ext in ['.png', '.mhtml']:
+        d[ext[1:] + 'path'] = os.path.join(ARCHIVE_DIR, uid + ext)
     return template.render(d)
 
 
