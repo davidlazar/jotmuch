@@ -26,7 +26,6 @@ URLSNAP = ['urlsnap', '--js']  # get rid of --js to disable JavaScript
 PNGVIEW = 'feh'
 
 HMAC_KEY = 'Jotmuch'
-EDITOR = os.environ.get('EDITOR', 'vim')
 
 # http://xapian.org/docs/omega/termprefixes.html
 boolean_prefix = {
@@ -196,7 +195,10 @@ def bookmark_url(url, tags=[], title='', notes='', archive=False, fetch_title=Fa
     doc = dict2doc(d)
 
     if use_editor:
-        newdocs = yaml2docs(editor(docs2yaml([doc])))
+        edited = editor(docs2yaml([doc]))
+        if edited == None:
+            return None
+        newdocs = yaml2docs(edited)
     else:
         newdocs = [doc]
 
@@ -411,7 +413,8 @@ def cli():
 def bookmark(url, tags, title, notes, archive, fetch_title, editor):
     """Bookmark the given URL."""
     docs = bookmark_url(url, list(tags), title, notes, archive, fetch_title, editor)
-    print_docs(docs)
+    if docs != None:
+        print_docs(docs)
 
 
 @cli.command(short_help='edit existing bookmarks')
@@ -419,9 +422,11 @@ def bookmark(url, tags, title, notes, archive, fetch_title, editor):
 def edit(terms):
     mset = search_terms(terms)
     docs = [m.document for m in mset]
-    newdocs = yaml2docs(editor(docs2yaml(docs)))
-    insert_docs(newdocs)
-    print_docs(newdocs)
+    newdocs = editor(docs2yaml(docs))
+    if newdocs != None:
+        newdocs = yaml2docs(newdocs)
+        insert_docs(newdocs)
+        print_docs(newdocs)
 
 
 @cli.command(short_help='delete bookmarks')
@@ -459,10 +464,12 @@ def archive(terms):
             docs.append(m.document)
     if docs:
         docs = [dict2doc(doc2dict(doc)) for doc in docs]
-        newdocs = yaml2docs(editor(docs2yaml(docs)))
-        insert_docs(newdocs)
-        print('')
-        print_docs(newdocs)
+        newdocs = editor(docs2yaml(docs))
+        if newdocs != None:
+            newdocs = yaml2docs(newdocs)
+            insert_docs(newdocs)
+            print('')
+            print_docs(newdocs)
 
 
 @cli.command(short_help='view webpage snapshots')
@@ -543,14 +550,7 @@ def jotimport(jsonfile):
 
 
 def editor(s, suffix='.yaml'):
-    with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
-        tmp.write(s)
-        tmp.flush()
-        subprocess.check_call([EDITOR, tmp.name])
-        tmp.seek(0)
-        r = tmp.read()
-    return r
-
+    return click.edit(s, extension=suffix, require_save=True)
 
 class OrderedDumper(yaml.SafeDumper):
     pass
